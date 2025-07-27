@@ -19,6 +19,16 @@
         #controls label, #controls button {
             margin: 5px;
         }
+        #info {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -28,6 +38,7 @@
         <button id="pauseButton">Pause</button>
         <button id="restartButton">Restart</button>
     </div>
+    <div id="info"></div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/controls/OrbitControls.js"></script>
     <script>
@@ -68,28 +79,60 @@
         let isPaused = false;
         let playbackSpeed = 1;
 
+        // Parse Wolfram-like JSON
+        function parseWolframData(data) {
+            try {
+                const meteorites = data[1]
+                    .filter(item => item[7][1][1] !== "NotAvailable" && item[6][1][0])
+                    .map(item => {
+                        try {
+                            return {
+                                name: item[0][1] || "Unknown",
+                                classification: item[3][1] || "Unknown",
+                                year: item[6][1][0][0] || 0,
+                                coordinates: item[7][1][1] ? [item[7][1][1][0], item[7][1][1][1]] : null
+                            };
+                        } catch (e) {
+                            console.warn(`Skipping invalid meteorite entry: ${e.message}`);
+                            return null;
+                        }
+                    })
+                    .filter(item => item && item.coordinates && !isNaN(item.coordinates[0]) && !isNaN(item.coordinates[1]))
+                    .sort((a, b) => a.year - b.year);
+                return meteorites;
+            } catch (e) {
+                console.error("Error parsing data:", e);
+                return [];
+            }
+        }
+
         // Load JSON data
         fetch('Meteorite-Landings.json')
-            .then(response => response.json())
-            .then(data => {
-                meteorites = data[1].filter(item => item[7][1][1] !== "NotAvailable")
-                    .map(item => ({
-                        name: item[0][1],
-                        year: item[6][1][0][0],
-                        coordinates: item[7][1][1] !== "NotAvailable" ? item[7][1][1] : null
-                    }))
-                    .filter(item => item.coordinates)
-                    .sort((a, b) => a.year - b.year);
-                console.log('Loaded meteorites:', meteorites);
+            .then(response => response.text())
+            .then(text => {
+                try {
+                    const data = JSON.parse(text.replace(/\\'/g, "'")); // Replace escaped single quotes
+                    meteorites = parseWolframData(data);
+                    console.log('Loaded meteorites:', meteorites.length, meteorites.slice(0, 5));
+                    if (meteorites.length === 0) {
+                        alert("No valid meteorite data loaded. Check JSON format.");
+                    }
+                } catch (e) {
+                    console.error('Error parsing JSON:', e);
+                    alert("Failed to parse JSON file. Please check the file format.");
+                }
             })
-            .catch(error => console.error('Error loading JSON:', error));
+            .catch(error => {
+                console.error('Error loading JSON:', error);
+                alert("Failed to load JSON file.");
+            });
 
         // Animation variables
         const strikeDuration = 1000; // Duration of each strike animation in ms
         let lastStrikeTime = 0;
 
         // Add meteorite strike
-        function addStrike(lat, lon, name) {
+        function addStrike(lat, lon, name, classification, year) {
             const phi = (90 - lat) * Math.PI / 180;
             const theta = (lon + 180) * Math.PI / 180;
             const x = -earthRadius * Math.sin(phi) * Math.cos(theta);
@@ -101,6 +144,11 @@
             const strike = new THREE.Mesh(strikeGeometry, strikeMaterial);
             strike.position.set(x, y, z);
             scene.add(strike);
+
+            // Show info
+            const infoDiv = document.getElementById('info');
+            infoDiv.style.display = 'block';
+            infoDiv.innerHTML = `Name: ${name}<br>Year: ${year}<br>Class: ${classification}`;
 
             // Animate strike (fade out)
             const startTime = performance.now();
@@ -114,6 +162,7 @@
                     scene.remove(strike);
                     strikeGeometry.dispose();
                     strikeMaterial.dispose();
+                    infoDiv.style.display = 'none';
                 }
             }
             requestAnimationFrame(animateStrike);
@@ -172,6 +221,7 @@
             isPaused = false;
             pauseButton.textContent = 'Pause';
             scene.children = scene.children.filter(child => child === earth || child instanceof THREE.Light);
+            document.getElementById('info').style.display = 'none';
         });
 
         // Animation loop
@@ -184,7 +234,13 @@
                 const currentTime = performance.now();
                 if (currentTime - lastStrikeTime > strikeDuration / playbackSpeed) {
                     const meteorite = meteorites[currentIndex];
-                    addStrike(meteorite.coordinates[0], meteorite.coordinates[1], meteorite.name);
+                    addStrike(
+                        meteorite.coordinates[0],
+                        meteorite.coordinates[1],
+                        meteorite.name,
+                        meteorite.classification,
+                        meteorite.year
+                    );
                     currentIndex++;
                     lastStrikeTime = currentTime;
                 }
